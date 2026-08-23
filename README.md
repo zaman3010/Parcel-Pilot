@@ -100,3 +100,24 @@ The frontend provides the user interface for chatting with the agent and viewing
 Once both servers are running:
 1. Open your browser and navigate to `http://localhost:5173` (or the port Vite provides).
 2. You can chat with the AI assistant, simulating customer queries or staff operations. The agent will read from the embedded vector database and interact with your MongoDB/SQLite databases to create orders and update tickets!
+
+---
+
+## 5. Architecture Note
+
+- **Agent Design**: The system leverages LangGraph to build a stateful, graph-based agent workflow. It implements strict persona separation (Customer vs. Internal Staff) using dynamic system prompts and API orchestration. Interrupts are used to pause execution for human-in-the-loop verification before state-changing actions (like escalations).
+- **Tool Design**: Tools are modularly bound to the LLM based on the active persona. For instance, customers only have access to knowledge search and basic escalation, while internal staff have access to advanced data querying and trend analysis (`analyze_trends`).
+- **Document and Structured-Data Handling**: Unstructured policies and SOPs are handled via RAG using ChromaDB and OpenAI embeddings (`text-embedding-3-small`). Structured business data (orders, tickets) is stored in MongoDB Atlas, with a dual-write mechanism to a local SQLite database for local persistence and redundancy.
+- **Source Reliability and Conflict Handling**: The LLM's system prompt dictates strict source precedence (e.g., Signed Agreement > Support Policy > Product Documentation). The agent is instructed to request human verification upon encountering data conflicts rather than hallucinating, and explicitly avoids deprecated policies.
+- **Major Technical Trade-offs**: 
+  1. **Dual-write persistence**: We chose to implement a dual-write pattern (MongoDB + SQLite) rather than relying solely on the cloud. This improves local development experience and offline redundancy, at the cost of slightly increased write latency.
+  2. **LLM SQL Generation vs Fixed Endpoints**: We allowed the internal agent to generate SQL for trend analysis. This maximizes flexibility for staff to query cross-account data without needing infinite backend endpoints, trading off against strict query predictability.
+
+## 6. Product Note
+
+- **Additional Client Problem Addressed**: We tackled the problem of **Unverified Escalations**. Customers often try to escalate issues without providing crucial contact or order details. We addressed this by implementing a strict prompt flow that forces the AI to explicitly gather the Order ID and contact details *before* ever invoking the `escalate_order` tool.
+- **What else we would build**: 
+  - **Real-time Webhooks**: Integration with carrier APIs to automatically update ticket statuses in the background.
+  - **Authentication / RBAC**: Moving beyond a simple UI dropdown to a full JWT-based authentication system to securely enforce persona constraints.
+- **What was intentionally left out**: Complex mock carrier integrations. The data fetching is heavily localized to the databases we built rather than reaching out to external fake courier APIs, to keep the focus on the LLM reasoning and data retrieval.
+- **Success Metric**: **Ticket Deflection Rate**. The primary metric to judge the product's usefulness is the percentage of customer queries that the AI successfully resolves on its own using RAG and database queries, without needing to invoke the `escalate_order` tool to loop in human staff.
