@@ -12,7 +12,7 @@ class AgentState(TypedDict):
     account_id: str  # For customer persona
 
 # Initialize LLM
-llm = ChatOpenAI(model="meta-llama/llama-3.1-8b-instruct", temperature=0)
+llm = ChatOpenAI(model="openai/gpt-4o-mini", temperature=0)
 
 # Define Tools per persona
 customer_tools = [search_knowledge_base, query_customer_data, escalate_order]

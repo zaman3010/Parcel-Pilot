@@ -1,15 +1,4 @@
-import sys
-try:
-    __import__('pysqlite3')
-    sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
-except ImportError:
-    pass
-import sys
-try:
-    __import__('pysqlite3')
-    sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
-except ImportError:
-    pass
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -23,10 +12,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from pymongo import MongoClient
 import datetime
 import os
-import os
-_k = "".join([chr(c) for c in [115, 107, 45, 111, 114, 45, 118, 49, 45, 50, 99, 102, 101, 55, 52, 48, 49, 53, 56, 98, 52, 51, 57, 56, 102, 102, 49, 52, 48, 52, 99, 97, 48, 48, 48, 100, 102, 51, 50, 97, 48, 101, 55, 48, 51, 100, 98, 50, 101, 100, 56, 53, 48, 100, 50, 56, 48, 48, 99, 100, 49, 99, 54, 98, 101, 49, 53, 50, 57, 50, 57, 49, 55]])
-os.environ["OPENAI_API_KEY"] = _k
-os.environ["OPENAI_API_BASE"] = "https://openrouter.ai/api/v1"
+
 import sys
 import random
 import string
@@ -34,7 +20,7 @@ import json
 from langchain_core.messages import AIMessageChunk
 from fastapi.responses import StreamingResponse
 
-MONGO_URI = "mongodb+srv://syednajamuzzaman94_db_user:c6VYJxmrErqHYCry@cluster0.niyumar.mongodb.net/?appName=Cluster0"
+MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://<username>:<password>@cluster0.example.mongodb.net/?appName=Cluster0")
 client = None
 db = None
 
@@ -182,6 +168,15 @@ def insert_orders(orders: List[OrderCreate]):
                         "status": "ACTIVE",
                         "premium_support": 0
                     })
+                    try:
+                        import sqlite3
+                        with sqlite3.connect('parcelpilot.db') as conn:
+                            conn.execute(
+                                "INSERT INTO accounts (account_id, account_name, plan, status, premium_support) VALUES (?, ?, ?, ?, ?)",
+                                (order.account_id, order.new_account_name, "Standard", "ACTIVE", 0)
+                            )
+                    except Exception as sqle:
+                        print(f"Local DB error (accounts): {sqle}")
 
             order_id = "ORD-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
             
@@ -195,6 +190,16 @@ def insert_orders(orders: List[OrderCreate]):
                 "pickup_window_end": order.pickup_window_end,
                 "shipment_fee_inr": order.shipment_fee_inr
             })
+            
+            try:
+                import sqlite3
+                with sqlite3.connect('parcelpilot.db') as conn:
+                    conn.execute(
+                        "INSERT INTO orders (order_id, account_id, carrier, status, booked_at, pickup_window_start, pickup_window_end, shipment_fee_inr) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (order_id, order.account_id, order.carrier, order.status, current_time, order.pickup_window_start, order.pickup_window_end, order.shipment_fee_inr)
+                    )
+            except Exception as sqle:
+                print(f"Local DB error (orders): {sqle}")
             inserted_ids.append(order_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -248,6 +253,16 @@ async def close_ticket(ticket_id: str, req: TicketCloseRequest):
         )
         if result.matched_count == 0:
             raise HTTPException(status_code=404, detail="Ticket not found.")
+            
+        try:
+            import sqlite3
+            with sqlite3.connect('parcelpilot.db') as conn:
+                conn.execute(
+                    "UPDATE tickets SET status = ?, historical_resolution = ? WHERE ticket_id = ?",
+                    ("closed", req.resolution, ticket_id)
+                )
+        except Exception as sqle:
+            print(f"Local DB error (closing ticket): {sqle}")
             
         return {"message": f"Ticket {ticket_id} closed successfully."}
     except Exception as e:

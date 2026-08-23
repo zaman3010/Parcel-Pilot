@@ -11,4 +11,3 @@ langchain-chroma
 langchain-community
 langchain-text-splitters
 langgraph
-pysqlite3-binary

@@ -1,9 +1,4 @@
-import sys
-try:
-    __import__('pysqlite3')
-    sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
-except ImportError:
-    pass
+
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
@@ -17,11 +12,9 @@ import shutil
 import tempfile
 
 CHROMA_PATH = os.path.join(os.path.dirname(__file__), "chroma_db")
-MONGO_URI = "mongodb+srv://syednajamuzzaman94_db_user:c6VYJxmrErqHYCry@cluster0.niyumar.mongodb.net/?appName=Cluster0"
+MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://<username>:<password>@cluster0.example.mongodb.net/?appName=Cluster0")
 
-_k = "".join([chr(c) for c in [115, 107, 45, 111, 114, 45, 118, 49, 45, 50, 99, 102, 101, 55, 52, 48, 49, 53, 56, 98, 52, 51, 57, 56, 102, 102, 49, 52, 48, 52, 99, 97, 48, 48, 48, 100, 102, 51, 50, 97, 48, 101, 55, 48, 51, 100, 98, 50, 101, 100, 56, 53, 48, 100, 50, 56, 48, 48, 99, 100, 49, 99, 54, 98, 101, 49, 53, 50, 57, 50, 57, 49, 55]])
-os.environ["OPENAI_API_KEY"] = _k
-os.environ["OPENAI_API_BASE"] = "https://openrouter.ai/api/v1"
+
 
 client = None
 db = None
@@ -146,8 +139,28 @@ def escalate_order(order_id: str = "", reason: str = "", customer_contact: str =
             "customer_contact": customer_contact
         })
         
+        try:
+            import sqlite3
+            with sqlite3.connect('parcelpilot.db') as conn:
+                conn.execute(
+                    "INSERT INTO tickets (ticket_id, account_id, created_at, status, subject, description, channel, assigned_to, customer_contact) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (ticket_id, account_id, current_time, "open", f"Escalation for Order {order_id}", reason, "chat", "support_queue", customer_contact)
+                )
+        except Exception as sqle:
+            print(f"Local DB error (tickets): {sqle}")
+        
         # Update the order status to reflect the escalation
         db.orders.update_one({"order_id": order_id}, {"$set": {"status": "ESCALATED"}})
+        
+        try:
+            import sqlite3
+            with sqlite3.connect('parcelpilot.db') as conn:
+                conn.execute(
+                    "UPDATE orders SET status = ? WHERE order_id = ?",
+                    ("ESCALATED", order_id)
+                )
+        except Exception as sqle:
+            print(f"Local DB error (escalating order): {sqle}")
         
         return f"Successfully escalated order {order_id} to human support (Ticket ID: {ticket_id}) for reason: {reason}. Contact details provided: {customer_contact}"
     except Exception as e:
