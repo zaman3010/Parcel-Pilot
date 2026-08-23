@@ -8,69 +8,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from agent import app as agent_app
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
-import psycopg2
-from psycopg2.extras import RealDictCursor
+from pymongo import MongoClient
 import datetime
 import os
+import random
+import string
+import json
+from langchain_core.messages import AIMessageChunk
+from fastapi.responses import StreamingResponse
 
-POSTGRES_URL = os.getenv("POSTGRES_URL")
+MONGO_URI = os.getenv("MONGO_URI")
+client = None
+db = None
 
-def init_db():
-    if not POSTGRES_URL:
-        return
-    try:
-        conn = psycopg2.connect(POSTGRES_URL)
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS accounts (
-                account_id TEXT PRIMARY KEY,
-                account_name TEXT,
-                plan TEXT,
-                status TEXT,
-                csm TEXT,
-                contract_file TEXT,
-                premium_support INTEGER,
-                notes TEXT
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS orders (
-                order_id TEXT PRIMARY KEY,
-                account_id TEXT,
-                carrier TEXT,
-                status TEXT,
-                booked_at TEXT,
-                pickup_window_start TEXT,
-                pickup_window_end TEXT,
-                pickup_actual_at TEXT,
-                shipment_fee_inr INTEGER,
-                carrier_fault INTEGER,
-                customer_fault INTEGER,
-                cancellation_requested_at TEXT,
-                notes TEXT
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS tickets (
-                ticket_id TEXT PRIMARY KEY,
-                account_id TEXT,
-                created_at TEXT,
-                status TEXT,
-                subject TEXT,
-                description TEXT,
-                channel TEXT,
-                assigned_to TEXT,
-                last_customer_message_at TEXT,
-                historical_resolution TEXT,
-                customer_contact TEXT
-            )
-        ''')
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"Error initializing Postgres DB: {e}")
-
-init_db()
+try:
+    if MONGO_URI:
+        client = MongoClient(MONGO_URI)
+        db = client.get_database("parcelpilot")
+except Exception as e:
+    print(f"Error connecting to MongoDB: {e}")
 
 # We will re-compile the graph with a memory saver to support interrupts
 from agent import workflow
@@ -86,10 +42,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-from fastapi.responses import StreamingResponse
-import json
-from langchain_core.messages import AIMessageChunk
 
 class ChatRequest(BaseModel):
     message: str
@@ -195,55 +147,40 @@ class OrderCreate(BaseModel):
     shipment_fee_inr: int
 
 def insert_orders(orders: List[OrderCreate]):
-    if not POSTGRES_URL:
-        raise HTTPException(status_code=500, detail="Database POSTGRES_URL not configured.")
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database MONGO_URI not configured.")
         
-    conn = psycopg2.connect(POSTGRES_URL)
-    cursor = conn.cursor()
-    
     current_time = datetime.datetime.utcnow().isoformat()
     inserted_ids = []
     
     try:
         for order in orders:
-            import random
-            import string
-            
-            # If new_account_name is provided, we must create the account first
             if order.new_account_name:
-                # Check if account already exists to be safe
-                cursor.execute("SELECT account_id FROM accounts WHERE account_id = %s", (order.account_id,))
-                if not cursor.fetchone():
-                    cursor.execute(
-                        """
-                        INSERT INTO accounts (account_id, account_name, plan, status, premium_support)
-                        VALUES (%s, %s, 'Standard', 'ACTIVE', 0)
-                        """,
-                        (order.account_id, order.new_account_name)
-                    )
+                existing = db.accounts.find_one({"account_id": order.account_id})
+                if not existing:
+                    db.accounts.insert_one({
+                        "account_id": order.account_id,
+                        "account_name": order.new_account_name,
+                        "plan": "Standard",
+                        "status": "ACTIVE",
+                        "premium_support": 0
+                    })
 
             order_id = "ORD-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
             
-            cursor.execute(
-                """
-                INSERT INTO orders (
-                    order_id, account_id, carrier, status, booked_at, 
-                    pickup_window_start, pickup_window_end, shipment_fee_inr
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    order_id, order.account_id, order.carrier, order.status, 
-                    current_time, order.pickup_window_start, order.pickup_window_end, 
-                    order.shipment_fee_inr
-                )
-            )
+            db.orders.insert_one({
+                "order_id": order_id,
+                "account_id": order.account_id,
+                "carrier": order.carrier,
+                "status": order.status,
+                "booked_at": current_time,
+                "pickup_window_start": order.pickup_window_start,
+                "pickup_window_end": order.pickup_window_end,
+                "shipment_fee_inr": order.shipment_fee_inr
+            })
             inserted_ids.append(order_id)
-        conn.commit()
     except Exception as e:
-        conn.rollback()
         raise HTTPException(status_code=400, detail=str(e))
-    finally:
-        conn.close()
         
     return inserted_ids
 
@@ -259,66 +196,42 @@ async def create_bulk_orders(orders: List[OrderCreate]):
 
 @app.get("/api/orders")
 async def get_orders():
-    if not POSTGRES_URL:
-        raise HTTPException(status_code=500, detail="Database POSTGRES_URL not configured.")
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database MONGO_URI not configured.")
         
     try:
-        conn = psycopg2.connect(POSTGRES_URL)
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("SELECT * FROM orders ORDER BY booked_at DESC LIMIT 100")
-        rows = cursor.fetchall()
-        return [dict(row) for row in rows]
+        orders = list(db.orders.find({}, {"_id": 0}).sort("booked_at", -1).limit(100))
+        return orders
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if 'conn' in locals():
-            conn.close()
 
 @app.get("/api/tickets")
 async def get_tickets():
-    if not POSTGRES_URL:
-        raise HTTPException(status_code=500, detail="Database POSTGRES_URL not configured.")
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database MONGO_URI not configured.")
         
-    conn = psycopg2.connect(POSTGRES_URL)
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    
     try:
-        cursor.execute("SELECT * FROM tickets ORDER BY created_at DESC")
-        rows = cursor.fetchall()
-        return [dict(row) for row in rows]
+        tickets = list(db.tickets.find({}, {"_id": 0}).sort("created_at", -1))
+        return tickets
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    finally:
-        conn.close()
 
 class TicketCloseRequest(BaseModel):
     resolution: str
 
 @app.post("/api/tickets/{ticket_id}/close")
 async def close_ticket(ticket_id: str, req: TicketCloseRequest):
-    if not POSTGRES_URL:
-        raise HTTPException(status_code=500, detail="Database POSTGRES_URL not configured.")
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database MONGO_URI not configured.")
         
-    conn = psycopg2.connect(POSTGRES_URL)
-    cursor = conn.cursor()
     try:
-        cursor.execute("SELECT status FROM tickets WHERE ticket_id = %s", (ticket_id,))
-        row = cursor.fetchone()
-        if not row:
+        result = db.tickets.update_one(
+            {"ticket_id": ticket_id},
+            {"$set": {"status": "closed", "historical_resolution": req.resolution}}
+        )
+        if result.matched_count == 0:
             raise HTTPException(status_code=404, detail="Ticket not found.")
             
-        cursor.execute(
-            """
-            UPDATE tickets 
-            SET status = 'closed', historical_resolution = %s 
-            WHERE ticket_id = %s
-            """,
-            (req.resolution, ticket_id)
-        )
-        conn.commit()
         return {"message": f"Ticket {ticket_id} closed successfully."}
     except Exception as e:
-        conn.rollback()
         raise HTTPException(status_code=400, detail=str(e))
-    finally:
-        conn.close()

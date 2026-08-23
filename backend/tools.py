@@ -1,18 +1,40 @@
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
-import psycopg2
+from pymongo import MongoClient
 import pandas as pd
 import os
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
 
+import shutil
+import tempfile
+
 CHROMA_PATH = os.path.join(os.path.dirname(__file__), "chroma_db")
-POSTGRES_URL = os.getenv("POSTGRES_URL")
+MONGO_URI = os.getenv("MONGO_URI")
+
+client = None
+db = None
+try:
+    if MONGO_URI:
+        client = MongoClient(MONGO_URI)
+        db = client.get_database("parcelpilot")
+except Exception as e:
+    print(f"Error connecting to MongoDB: {e}")
 
 # Initialize Chroma
 embeddings = OpenAIEmbeddings(model="openai/text-embedding-3-small")
-vector_store = Chroma(embedding_function=embeddings)
+
+# Handle read-only filesystem on Vercel
+try:
+    TMP_CHROMA_PATH = os.path.join(tempfile.gettempdir(), "parcelpilot_chroma_db")
+    if not os.path.exists(TMP_CHROMA_PATH):
+        shutil.copytree(CHROMA_PATH, TMP_CHROMA_PATH)
+    active_chroma_path = TMP_CHROMA_PATH
+except Exception:
+    active_chroma_path = CHROMA_PATH
+
+vector_store = Chroma(embedding_function=embeddings, persist_directory=active_chroma_path)
 
 class SearchInput(BaseModel):
     query: str = Field(description="The search query (e.g. 'cancellation policy')")
@@ -23,7 +45,6 @@ def search_knowledge_base(query: str, account_id: Optional[str] = None) -> str:
     """Searches the knowledge base containing policies, SOPs, and customer agreements. 
     Use this to find rules, policies, and standard operating procedures."""
     
-    # We retrieve more documents and then let the LLM filter out DEPRECATED ones unless specifically asked
     docs = vector_store.similarity_search(query, k=5)
     
     results = []
@@ -32,10 +53,7 @@ def search_knowledge_base(query: str, account_id: Optional[str] = None) -> str:
         status = doc.metadata.get('status', 'CURRENT')
         customer = doc.metadata.get('customer', 'General')
         
-        # Access control on customer agreements
         if status == "CUSTOMER_AGREEMENT":
-            # If account_id doesn't match some mapping (simplified here), we shouldn't return it
-            # For this assessment, if an agreement is found, we should include it and let the LLM know
             results.append(f"Source: {source} (Status: {status}, Applies to: {customer})\nContent: {doc.page_content}\n")
         else:
             results.append(f"Source: {source} (Status: {status})\nContent: {doc.page_content}\n")
@@ -44,40 +62,46 @@ def search_knowledge_base(query: str, account_id: Optional[str] = None) -> str:
 
 
 class QueryDataInput(BaseModel):
-    query: str = Field(description="SQL query to execute against the SQLite database.")
+    collection: str = Field(description="The MongoDB collection to query ('accounts', 'orders', or 'tickets').")
+    filter_query: str = Field(default="{}", description="A valid JSON string representing the MongoDB filter query (e.g., '{\"status\": \"open\"}').")
     account_id: Optional[str] = Field(None, description="The account ID to scope the query. REQUIRED for customer-facing agents.")
 
 @tool("query_customer_data", args_schema=QueryDataInput)
-def query_customer_data(query: str, account_id: Optional[str] = None) -> str:
+def query_customer_data(collection: str, filter_query: str = "{}", account_id: Optional[str] = None) -> str:
     """Queries structured operational data (accounts, orders, tickets).
-    The database contains tables:
+    The database contains collections:
     - accounts (account_id, account_name, plan, status, premium_support)
-    - orders (order_id, account_id, carrier, status, booked_at, pickup_window_start, pickup_window_end, pickup_actual_at, shipment_fee_inr, carrier_fault, customer_fault) 
-      Note: default order status is 'BOOKED'.
+    - orders (order_id, account_id, carrier, status, booked_at, pickup_window_start, pickup_window_end, pickup_actual_at, shipment_fee_inr) 
     - tickets (ticket_id, account_id, created_at, status, subject, description, channel, assigned_to, historical_resolution, customer_contact)
     
-    WARNING: For customer-facing queries, you MUST include 'WHERE account_id = ...' in your SQL to ensure privacy."""
+    WARNING: For customer-facing queries, you MUST include 'account_id' in your filter JSON to ensure privacy."""
     
-    if not POSTGRES_URL:
-        return "Database POSTGRES_URL not configured."
+    if db is None:
+        return "Database MONGO_URI not configured."
         
     try:
-        conn = psycopg2.connect(POSTGRES_URL)
-        df = pd.read_sql_query(query, conn)
-        conn.close()
-        
-        if df.empty:
+        import json
+        query_dict = json.loads(filter_query)
+        if account_id:
+            query_dict["account_id"] = account_id
+            
+        if collection not in ["accounts", "orders", "tickets"]:
+            return "Invalid collection name. Choose from 'accounts', 'orders', 'tickets'."
+            
+        results = list(db[collection].find(query_dict, {"_id": 0}).limit(50))
+        if not results:
             return "No results found."
             
+        df = pd.DataFrame(results)
         return df.to_markdown(index=False)
     except Exception as e:
         return f"Error executing query: {str(e)}"
 
 
 class EscalateInput(BaseModel):
-    order_id: str = Field(default="", description="The EXACT ID of the order to escalate. DO NOT INVENT, GUESS, OR HALLUCINATE THIS. If the user did not explicitly provide an order ID, leave this empty.")
+    order_id: str = Field(default="", description="The EXACT ID of the order to escalate.")
     reason: str = Field(default="", description="The reason for escalation.")
-    customer_contact: str = Field(default="", description="The customer's email address or phone number for the internal team to reach out. DO NOT GUESS. Ask the user for it.")
+    customer_contact: str = Field(default="", description="The customer's contact details.")
 
 @tool("escalate_order", args_schema=EscalateInput)
 def escalate_order(order_id: str = "", reason: str = "", customer_contact: str = "") -> str:
@@ -90,54 +114,58 @@ def escalate_order(order_id: str = "", reason: str = "", customer_contact: str =
     import random
     import string
     
-    if not POSTGRES_URL:
-        return "Database POSTGRES_URL not configured."
+    if db is None:
+        return "Database MONGO_URI not configured."
         
     try:
-        conn = psycopg2.connect(POSTGRES_URL)
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT account_id FROM orders WHERE order_id = %s", (order_id,))
-        row = cursor.fetchone()
-        account_id = row[0] if row else "ACC-UNKNOWN"
+        order = db.orders.find_one({"order_id": order_id})
+        account_id = order["account_id"] if order else "ACC-UNKNOWN"
         
         ticket_id = "TKT-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
         current_time = datetime.datetime.utcnow().isoformat()
         
-        cursor.execute(
-            """
-            INSERT INTO tickets (
-                ticket_id, account_id, created_at, status, subject, 
-                description, channel, assigned_to, customer_contact
-            ) VALUES (%s, %s, %s, 'open', %s, %s, 'chat', 'support_queue', %s)
-            """,
-            (ticket_id, account_id, current_time, f"Escalation for Order {order_id}", reason, customer_contact)
-        )
+        db.tickets.insert_one({
+            "ticket_id": ticket_id,
+            "account_id": account_id,
+            "created_at": current_time,
+            "status": "open",
+            "subject": f"Escalation for Order {order_id}",
+            "description": reason,
+            "channel": "chat",
+            "assigned_to": "support_queue",
+            "customer_contact": customer_contact
+        })
         
         # Update the order status to reflect the escalation
-        cursor.execute("UPDATE orders SET status = 'ESCALATED' WHERE order_id = %s", (order_id,))
+        db.orders.update_one({"order_id": order_id}, {"$set": {"status": "ESCALATED"}})
         
-        conn.commit()
-        conn.close()
         return f"Successfully escalated order {order_id} to human support (Ticket ID: {ticket_id}) for reason: {reason}. Contact details provided: {customer_contact}"
     except Exception as e:
         return f"Error creating ticket: {str(e)}"
 
-# Internal tools can include broader analytics queries
-@tool("analyze_trends")
-def analyze_trends(query: str) -> str:
+class AnalyzeInput(BaseModel):
+    collection: str = Field(description="The MongoDB collection to query ('accounts', 'orders', or 'tickets').")
+    pipeline: str = Field(default="[]", description="A valid JSON string representing the MongoDB aggregation pipeline (e.g., '[{\"$match\": {\"status\": \"open\"}}]').")
+
+@tool("analyze_trends", args_schema=AnalyzeInput)
+def analyze_trends(collection: str, pipeline: str = "[]") -> str:
     """Internal tool only: Analyzes broader trends across all accounts (e.g. 'show me tickets by severity').
-    Executes an SQL query without account_id restrictions."""
-    if not POSTGRES_URL:
-        return "Database POSTGRES_URL not configured."
+    Executes a MongoDB aggregation pipeline."""
+    if db is None:
+        return "Database MONGO_URI not configured."
     try:
-        conn = psycopg2.connect(POSTGRES_URL)
-        df = pd.read_sql_query(query, conn)
-        conn.close()
+        import json
+        pipeline_list = json.loads(pipeline)
         
-        if df.empty:
+        if collection not in ["accounts", "orders", "tickets"]:
+            return "Invalid collection name."
+            
+        results = list(db[collection].aggregate(pipeline_list))
+        
+        if not results:
             return "No results found."
             
+        df = pd.DataFrame(results)
         return df.to_markdown(index=False)
     except Exception as e:
-        return f"Error executing query: {str(e)}"
+        return f"Error executing pipeline: {str(e)}"
