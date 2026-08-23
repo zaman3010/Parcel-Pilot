@@ -68,7 +68,7 @@ The backend handles AI generation, knowledge base (ChromaDB) vector embeddings, 
    OPENAI_API_BASE=https://openrouter.ai/api/v1
    MONGO_URI=mongodb+srv://<username>:<password>@cluster0.example.mongodb.net/?appName=Cluster0
    ```
-   *(Note: For `MONGO_URI`, paste your connection string and replace `<username>` and `<password>` with the database user credentials you created in Step 4. Also replace `your_api_key_here` with your OpenRouter/OpenAI key)*
+   *(Note: To connect to your own database, you **must** change the `MONGO_URI` in this `backend/.env` file. Paste your connection string here and replace `<username>` and `<password>` with the database user credentials you created in Step 4. If you aren't using a `.env` file, you can alternatively update the fallback `MONGO_URI` variable directly inside `backend/main.py` and `backend/tools.py`.)*
 
 6. **Run the backend server**:
    ```bash
