@@ -8,8 +8,6 @@ import os
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
 
-import shutil
-import tempfile
 
 CHROMA_PATH = os.path.join(os.path.dirname(__file__), "chroma_db")
 MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://<username>:<password>@cluster0.example.mongodb.net/?appName=Cluster0")
@@ -28,16 +26,7 @@ except Exception as e:
 # Initialize Chroma
 embeddings = OpenAIEmbeddings(model="openai/text-embedding-3-small")
 
-# Handle read-only filesystem on Vercel
-try:
-    TMP_CHROMA_PATH = os.path.join(tempfile.gettempdir(), "parcelpilot_chroma_db")
-    if not os.path.exists(TMP_CHROMA_PATH):
-        shutil.copytree(CHROMA_PATH, TMP_CHROMA_PATH)
-    active_chroma_path = TMP_CHROMA_PATH
-except Exception:
-    active_chroma_path = CHROMA_PATH
-
-vector_store = Chroma(embedding_function=embeddings, persist_directory=active_chroma_path)
+vector_store = Chroma(embedding_function=embeddings, persist_directory=CHROMA_PATH)
 
 class SearchInput(BaseModel):
     query: str = Field(description="The search query (e.g. 'cancellation policy')")
