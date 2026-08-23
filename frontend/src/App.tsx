@@ -6,6 +6,9 @@ import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import './index.css';
 
+// Use environment variable for API URL in production, fallback to localhost for development
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
 type Message = {
   id: string;
   role: 'user' | 'assistant';
@@ -60,7 +63,7 @@ function App() {
   }, [messages, internalTab]);
 
   const fetchTickets = () => {
-    fetch('http://localhost:8000/api/tickets')
+    fetch(`${API_BASE_URL}/api/tickets`)
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -74,7 +77,7 @@ function App() {
   };
 
   const fetchOrders = () => {
-    fetch('http://localhost:8000/api/orders')
+    fetch(`${API_BASE_URL}/api/orders`)
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -98,7 +101,7 @@ function App() {
   const handleCloseTicket = async () => {
     if (!closeReason.trim() || !selectedTicket || !closerName.trim()) return;
     try {
-      const res = await fetch(`http://localhost:8000/api/tickets/${selectedTicket.ticket_id}/close`, {
+      const res = await fetch(`${API_BASE_URL}/api/tickets/${selectedTicket.ticket_id}/close`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ resolution: `Closed by ${closerName.trim()}: ${closeReason.trim()}` })
@@ -126,7 +129,7 @@ function App() {
     setIsLoading(true);
 
     try {
-      const res = await fetch('http://localhost:8000/chat', {
+      const res = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -204,7 +207,7 @@ function App() {
   const handleConfirm = async (confirm: boolean, msgId: string) => {
     setIsLoading(true);
     try {
-      const res = await fetch('http://localhost:8000/confirm', {
+      const res = await fetch(`${API_BASE_URL}/confirm`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -312,7 +315,7 @@ function App() {
         payload.carrier = customCarrier;
       }
       
-      const res = await fetch('http://localhost:8000/api/orders/single', {
+      const res = await fetch(`${API_BASE_URL}/api/orders/single`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -347,7 +350,7 @@ function App() {
       });
 
       try {
-        const res = await fetch('http://localhost:8000/api/orders/bulk', {
+        const res = await fetch(`${API_BASE_URL}/api/orders/bulk`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(orders)
