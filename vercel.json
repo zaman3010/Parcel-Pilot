@@ -12,22 +12,22 @@
       }
     }
   ],
-  "routes": [
+  "rewrites": [
     {
-      "src": "/chat",
-      "dest": "backend/main.py"
+      "source": "/chat",
+      "destination": "/backend/main.py"
     },
     {
-      "src": "/confirm",
-      "dest": "backend/main.py"
+      "source": "/confirm",
+      "destination": "/backend/main.py"
     },
     {
-      "src": "/api/(.*)",
-      "dest": "backend/main.py"
+      "source": "/api/(.*)",
+      "destination": "/backend/main.py"
     },
     {
-      "src": "/(.*)",
-      "dest": "frontend/dist/$1"
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }
