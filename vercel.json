@@ -12,22 +12,26 @@
       }
     }
   ],
-  "rewrites": [
+  "routes": [
     {
-      "source": "/chat",
-      "destination": "/backend/main.py"
+      "src": "/chat",
+      "dest": "backend/main.py"
     },
     {
-      "source": "/confirm",
-      "destination": "/backend/main.py"
+      "src": "/confirm",
+      "dest": "backend/main.py"
     },
     {
-      "source": "/api/(.*)",
-      "destination": "/backend/main.py"
+      "src": "/api/(.*)",
+      "dest": "backend/main.py"
     },
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "src": "/assets/(.*)",
+      "dest": "/frontend/dist/assets/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/frontend/dist/index.html"
     }
   ]
 }
