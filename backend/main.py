@@ -18,10 +18,6 @@ import json
 from langchain_core.messages import AIMessageChunk
 from fastapi.responses import StreamingResponse
 
-if os.getenv("VERCEL") != "1":
-    print("SECURITY ALERT: This application is restricted to run exclusively on Vercel.")
-    sys.exit(1)
-
 MONGO_URI = os.getenv("MONGO_URI")
 client = None
 db = None
