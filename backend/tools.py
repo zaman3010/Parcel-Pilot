@@ -1,18 +1,18 @@
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
-import sqlite3
+import psycopg2
 import pandas as pd
 import os
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
 
 CHROMA_PATH = os.path.join(os.path.dirname(__file__), "chroma_db")
-DB_PATH = os.path.join(os.path.dirname(__file__), "parcelpilot.db")
+POSTGRES_URL = os.getenv("POSTGRES_URL")
 
 # Initialize Chroma
 embeddings = OpenAIEmbeddings(model="openai/text-embedding-3-small")
-vector_store = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
+vector_store = Chroma(embedding_function=embeddings)
 
 class SearchInput(BaseModel):
     query: str = Field(description="The search query (e.g. 'cancellation policy')")
@@ -58,11 +58,11 @@ def query_customer_data(query: str, account_id: Optional[str] = None) -> str:
     
     WARNING: For customer-facing queries, you MUST include 'WHERE account_id = ...' in your SQL to ensure privacy."""
     
-    if not os.path.exists(DB_PATH):
-        return "Database not found. Please ingest data first."
+    if not POSTGRES_URL:
+        return "Database POSTGRES_URL not configured."
         
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = psycopg2.connect(POSTGRES_URL)
         df = pd.read_sql_query(query, conn)
         conn.close()
         
@@ -90,14 +90,14 @@ def escalate_order(order_id: str = "", reason: str = "", customer_contact: str =
     import random
     import string
     
-    if not os.path.exists(DB_PATH):
-        return "Database not found."
+    if not POSTGRES_URL:
+        return "Database POSTGRES_URL not configured."
         
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = psycopg2.connect(POSTGRES_URL)
         cursor = conn.cursor()
         
-        cursor.execute("SELECT account_id FROM orders WHERE order_id = ?", (order_id,))
+        cursor.execute("SELECT account_id FROM orders WHERE order_id = %s", (order_id,))
         row = cursor.fetchone()
         account_id = row[0] if row else "ACC-UNKNOWN"
         
@@ -109,13 +109,13 @@ def escalate_order(order_id: str = "", reason: str = "", customer_contact: str =
             INSERT INTO tickets (
                 ticket_id, account_id, created_at, status, subject, 
                 description, channel, assigned_to, customer_contact
-            ) VALUES (?, ?, ?, 'open', ?, ?, 'chat', 'support_queue', ?)
+            ) VALUES (%s, %s, %s, 'open', %s, %s, 'chat', 'support_queue', %s)
             """,
             (ticket_id, account_id, current_time, f"Escalation for Order {order_id}", reason, customer_contact)
         )
         
         # Update the order status to reflect the escalation
-        cursor.execute("UPDATE orders SET status = 'ESCALATED' WHERE order_id = ?", (order_id,))
+        cursor.execute("UPDATE orders SET status = 'ESCALATED' WHERE order_id = %s", (order_id,))
         
         conn.commit()
         conn.close()
@@ -128,8 +128,10 @@ def escalate_order(order_id: str = "", reason: str = "", customer_contact: str =
 def analyze_trends(query: str) -> str:
     """Internal tool only: Analyzes broader trends across all accounts (e.g. 'show me tickets by severity').
     Executes an SQL query without account_id restrictions."""
+    if not POSTGRES_URL:
+        return "Database POSTGRES_URL not configured."
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = psycopg2.connect(POSTGRES_URL)
         df = pd.read_sql_query(query, conn)
         conn.close()
         

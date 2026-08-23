@@ -8,11 +8,69 @@ from fastapi.middleware.cors import CORSMiddleware
 from agent import app as agent_app
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
-import sqlite3
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import datetime
 import os
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "parcelpilot.db")
+POSTGRES_URL = os.getenv("POSTGRES_URL")
+
+def init_db():
+    if not POSTGRES_URL:
+        return
+    try:
+        conn = psycopg2.connect(POSTGRES_URL)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS accounts (
+                account_id TEXT PRIMARY KEY,
+                account_name TEXT,
+                plan TEXT,
+                status TEXT,
+                csm TEXT,
+                contract_file TEXT,
+                premium_support INTEGER,
+                notes TEXT
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS orders (
+                order_id TEXT PRIMARY KEY,
+                account_id TEXT,
+                carrier TEXT,
+                status TEXT,
+                booked_at TEXT,
+                pickup_window_start TEXT,
+                pickup_window_end TEXT,
+                pickup_actual_at TEXT,
+                shipment_fee_inr INTEGER,
+                carrier_fault INTEGER,
+                customer_fault INTEGER,
+                cancellation_requested_at TEXT,
+                notes TEXT
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tickets (
+                ticket_id TEXT PRIMARY KEY,
+                account_id TEXT,
+                created_at TEXT,
+                status TEXT,
+                subject TEXT,
+                description TEXT,
+                channel TEXT,
+                assigned_to TEXT,
+                last_customer_message_at TEXT,
+                historical_resolution TEXT,
+                customer_contact TEXT
+            )
+        ''')
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error initializing Postgres DB: {e}")
+
+init_db()
 
 # We will re-compile the graph with a memory saver to support interrupts
 from agent import workflow
@@ -137,10 +195,10 @@ class OrderCreate(BaseModel):
     shipment_fee_inr: int
 
 def insert_orders(orders: List[OrderCreate]):
-    if not os.path.exists(DB_PATH):
-        raise HTTPException(status_code=500, detail="Database not found.")
+    if not POSTGRES_URL:
+        raise HTTPException(status_code=500, detail="Database POSTGRES_URL not configured.")
         
-    conn = sqlite3.connect(DB_PATH)
+    conn = psycopg2.connect(POSTGRES_URL)
     cursor = conn.cursor()
     
     current_time = datetime.datetime.utcnow().isoformat()
@@ -154,12 +212,12 @@ def insert_orders(orders: List[OrderCreate]):
             # If new_account_name is provided, we must create the account first
             if order.new_account_name:
                 # Check if account already exists to be safe
-                cursor.execute("SELECT account_id FROM accounts WHERE account_id = ?", (order.account_id,))
+                cursor.execute("SELECT account_id FROM accounts WHERE account_id = %s", (order.account_id,))
                 if not cursor.fetchone():
                     cursor.execute(
                         """
                         INSERT INTO accounts (account_id, account_name, plan, status, premium_support)
-                        VALUES (?, ?, 'Standard', 'ACTIVE', 0)
+                        VALUES (%s, %s, 'Standard', 'ACTIVE', 0)
                         """,
                         (order.account_id, order.new_account_name)
                     )
@@ -171,7 +229,7 @@ def insert_orders(orders: List[OrderCreate]):
                 INSERT INTO orders (
                     order_id, account_id, carrier, status, booked_at, 
                     pickup_window_start, pickup_window_end, shipment_fee_inr
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     order_id, order.account_id, order.carrier, order.status, 
@@ -201,13 +259,12 @@ async def create_bulk_orders(orders: List[OrderCreate]):
 
 @app.get("/api/orders")
 async def get_orders():
-    if not os.path.exists(DB_PATH):
-        raise HTTPException(status_code=500, detail="Database not found.")
+    if not POSTGRES_URL:
+        raise HTTPException(status_code=500, detail="Database POSTGRES_URL not configured.")
         
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        conn = psycopg2.connect(POSTGRES_URL)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute("SELECT * FROM orders ORDER BY booked_at DESC LIMIT 100")
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
@@ -219,12 +276,11 @@ async def get_orders():
 
 @app.get("/api/tickets")
 async def get_tickets():
-    if not os.path.exists(DB_PATH):
-        raise HTTPException(status_code=500, detail="Database not found.")
+    if not POSTGRES_URL:
+        raise HTTPException(status_code=500, detail="Database POSTGRES_URL not configured.")
         
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+    conn = psycopg2.connect(POSTGRES_URL)
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
     
     try:
         cursor.execute("SELECT * FROM tickets ORDER BY created_at DESC")
@@ -240,13 +296,13 @@ class TicketCloseRequest(BaseModel):
 
 @app.post("/api/tickets/{ticket_id}/close")
 async def close_ticket(ticket_id: str, req: TicketCloseRequest):
-    if not os.path.exists(DB_PATH):
-        raise HTTPException(status_code=500, detail="Database not found.")
+    if not POSTGRES_URL:
+        raise HTTPException(status_code=500, detail="Database POSTGRES_URL not configured.")
         
-    conn = sqlite3.connect(DB_PATH)
+    conn = psycopg2.connect(POSTGRES_URL)
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT status FROM tickets WHERE ticket_id = ?", (ticket_id,))
+        cursor.execute("SELECT status FROM tickets WHERE ticket_id = %s", (ticket_id,))
         row = cursor.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Ticket not found.")
@@ -254,8 +310,8 @@ async def close_ticket(ticket_id: str, req: TicketCloseRequest):
         cursor.execute(
             """
             UPDATE tickets 
-            SET status = 'closed', historical_resolution = ? 
-            WHERE ticket_id = ?
+            SET status = 'closed', historical_resolution = %s 
+            WHERE ticket_id = %s
             """,
             (req.resolution, ticket_id)
         )
