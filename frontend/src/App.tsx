@@ -568,7 +568,7 @@ function App() {
                   <label>Pickup Start Window</label>
                   <DatePicker
                     selected={startDateTime}
-                    onChange={(date) => setStartDateTime(date)}
+                    onChange={(date: Date | null) => setStartDateTime(date)}
                     showTimeSelect
                     timeFormat="HH:mm"
                     timeIntervals={1}
@@ -583,7 +583,7 @@ function App() {
                   <label>Pickup End Window</label>
                   <DatePicker
                     selected={endDateTime}
-                    onChange={(date) => setEndDateTime(date)}
+                    onChange={(date: Date | null) => setEndDateTime(date)}
                     showTimeSelect
                     timeFormat="HH:mm"
                     timeIntervals={1}
