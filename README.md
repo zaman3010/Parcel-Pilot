@@ -4,6 +4,12 @@ ParcelPilot is an AI-powered customer support and logistics platform that helps 
 
 The project is split into a **FastAPI backend** and a **React/Vite frontend**.
 
+## Data Storage Architecture
+
+ParcelPilot uses a **dual-write persistence** system to ensure your data is always safe and accessible:
+1. **MongoDB Atlas (Primary Cloud Database)**: Acts as the main data store. All tickets, orders, and interactions created by the AI agent are primarily pushed here.
+2. **SQLite (Secondary Local Database)**: Acts as a local backup and offline reference. Every time data is pushed to MongoDB, it is simultaneously written to a local SQLite file (`backend/parcelpilot.db`).
+
 ## Prerequisites
 
 Before you begin, ensure you have the following installed on your machine:
@@ -48,16 +54,23 @@ The backend handles AI generation, knowledge base (ChromaDB) vector embeddings, 
    pip install -r requirements.txt
    ```
 
-4. **Environment Configuration**:
+4. **MongoDB Atlas Setup**:
+   To connect the app to your own MongoDB cluster:
+   - Go to [MongoDB Atlas](https://www.mongodb.com/cloud/atlas/register) and create a free account/cluster.
+   - Go to **Database Access** and create a new Database User (note down the username and password).
+   - Go to **Network Access** and add your IP address (or `0.0.0.0/0` to allow all).
+   - Go back to **Database**, click **Connect**, choose **Drivers** (Python), and copy the connection string.
+
+5. **Environment Configuration**:
    Create a file named `.env` in the `backend/` directory and add the following keys:
    ```env
    OPENAI_API_KEY=your_api_key_here
    OPENAI_API_BASE=https://openrouter.ai/api/v1
    MONGO_URI=mongodb+srv://<username>:<password>@cluster0.example.mongodb.net/?appName=Cluster0
    ```
-   *(Note: Replace `your_api_key_here` and the `MONGO_URI` with your actual credentials)*
+   *(Note: For `MONGO_URI`, paste your connection string and replace `<username>` and `<password>` with the database user credentials you created in Step 4. Also replace `your_api_key_here` with your OpenRouter/OpenAI key)*
 
-5. **Run the backend server**:
+6. **Run the backend server**:
    ```bash
    python -m uvicorn main:app --reload
    ```
