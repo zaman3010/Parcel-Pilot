@@ -1,3 +1,9 @@
+import sys
+try:
+    __import__('pysqlite3')
+    sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+except ImportError:
+    pass
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
